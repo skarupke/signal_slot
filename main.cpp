@@ -1,10 +1,12 @@
 #include "signal.h"
+#include "typeSortedSignal.h"
 #include <iostream>
 #ifndef DISABLE_GTEST
 #include <gtest/gtest.h>
 #endif
 #include <random>
 #include <cstring>
+#include <chrono>
 
 struct Updateable
 {
@@ -14,16 +16,20 @@ struct Updateable
 
 struct UpdateableA : Updateable
 {
-	virtual void update(float dt) override
+	UpdateableA()
+		: calls(0)
+	{
+	}
+	virtual void update(float) override
 	{
 		++calls;
 	}
 
-	size_t calls = 0;
+	size_t calls;
 };
 struct UpdateableB : Updateable
 {
-	virtual void update(float dt) override
+	virtual void update(float) override
 	{
 		++calls;
 	}
@@ -32,92 +38,170 @@ struct UpdateableB : Updateable
 size_t UpdateableB::calls = 0;
 
 
-struct SlotA
+struct LambdaA
 {
-	explicit SlotA(std::vector<std::function<void (float)>> & update_loop)
+	explicit LambdaA(std::vector<std::function<void (float)>> & update_loop)
+		: calls(0)
 	{
 		update_loop.emplace_back([this](float dt) { update(dt); });
 	}
-	void update(float dt)
+	void update(float)
 	{
 		++calls;
 	}
-	size_t calls = 0;
+	size_t calls;
 };
 
-struct SlotB
+struct LambdaB
 {
-	explicit SlotB(std::vector<std::function<void (float)>> & update_loop)
+	explicit LambdaB(std::vector<std::function<void (float)>> & update_loop)
 	{
 		update_loop.emplace_back([this](float dt) { update(dt); });
 	}
-	void update(float dt)
+	void update(float)
 	{
 		++calls;
 	}
 	static size_t calls;
 };
+size_t LambdaB::calls = 0;
+
+struct SlotA
+{
+	explicit SlotA(Signal<void (float)> & update_loop)
+		: calls(0)
+		, update_disconnect(update_loop.connect([this](float dt) { update(dt); }))
+	{
+	}
+	void update(float)
+	{
+		++calls;
+	}
+	size_t calls;
+	SignalDisconnecter update_disconnect;
+};
+
+struct SlotB
+{
+	explicit SlotB(Signal<void (float)> & update_loop)
+		: update_disconnect(update_loop.connect([this](float dt) { update(dt); }))
+	{
+	}
+	void update(float)
+	{
+		++calls;
+	}
+	static size_t calls;
+	SignalDisconnecter update_disconnect;
+};
 size_t SlotB::calls = 0;
+
+struct ScopedMeasurer
+{
+	ScopedMeasurer(std::string name)
+		: name(std::move(name))
+		, clock()
+		, before(clock.now())
+	{
+	}
+	~ScopedMeasurer()
+	{
+		auto time_spent = std::chrono::duration_cast<std::chrono::milliseconds>(clock.now() - before);
+		std::cout << name << ": " << time_spent.count() << " ms" << std::endl;
+	}
+	std::string name;
+	std::chrono::high_resolution_clock clock;
+	std::chrono::time_point<std::chrono::high_resolution_clock> before;
+};
 
 int main(int argc, char * argv[])
 {
 #ifndef DISABLE_GTEST
 	::testing::InitGoogleTest(&argc, argv);
-	assert(!RUN_ALL_TESTS());
+	if (RUN_ALL_TESTS())
+	{
+		std::cin.get();
+		return 1;
+	}
 #endif
 
-	const size_t num_allocations = 10000;
-	const size_t num_calls = 100000;
+	static const size_t num_allocations = 1000;
+	static const size_t num_calls = 100000;
 
-	std::default_random_engine generator(argc);
-	std::uniform_int_distribution<int> random_int(0, 1);
-	for (int i = 1; i < argc; ++i)
 	{
-		if (std::strcmp(argv[i], "virtual_function") == 0)
+		std::default_random_engine generator(argc);
+		std::uniform_int_distribution<int> random_int(0, 1);
+		Signal<void (float)> update_loop;
+		std::vector<std::unique_ptr<SlotA>> slotsA;
+		std::vector<std::unique_ptr<SlotB>> slotsB;
+		for (size_t i = 0; i < num_allocations; ++i)
 		{
-			std::vector<std::unique_ptr<Updateable>> updateables;
-			for (size_t i = 0; i < num_allocations; ++i)
+			if (random_int(generator))
 			{
-				if (random_int(generator))
-				{
-					updateables.emplace_back(new UpdateableA);
-				}
-				else
-				{
-					updateables.emplace_back(new UpdateableB);
-				}
+				slotsA.emplace_back(new SlotA(update_loop));
 			}
-			for (int i = 0; i < num_calls; ++i)
+			else
 			{
-				for (auto & updateable : updateables)
-				{
-					updateable->update(0.016f);
-				}
+				slotsB.emplace_back(new SlotB(update_loop));
 			}
 		}
-		else if (std::strcmp(argv[i], "std_function") == 0)
+		ScopedMeasurer measure("signal");
+		for (int i = 0; i < num_calls; ++i)
 		{
-			std::vector<std::function<void (float)>> update_loop;
-			std::vector<std::unique_ptr<SlotA>> slotsA;
-			std::vector<std::unique_ptr<SlotB>> slotsB;
-			for (size_t i = 0; i < num_allocations; ++i)
+			update_loop.emit(0.016f);
+		}
+	}
+	{
+		std::default_random_engine generator(argc);
+		std::uniform_int_distribution<int> random_int(0, 1);
+		std::vector<std::unique_ptr<Updateable>> updateables;
+		std::vector<Updateable *> update_loop;
+		for (size_t i = 0; i < num_allocations; ++i)
+		{
+			if (random_int(generator))
 			{
-				if (random_int(generator))
-				{
-					slotsA.emplace_back(new SlotA{update_loop});
-				}
-				else
-				{
-					slotsB.emplace_back(new SlotB{update_loop});
-				}
+				updateables.emplace_back(new UpdateableA);
 			}
-			for (int i = 0; i < num_calls; ++i)
+			else
 			{
-				for (auto & updateable : update_loop)
-				{
-					updateable(0.016f);
-				}
+				updateables.emplace_back(new UpdateableB);
+			}
+			update_loop.push_back(updateables.back().get());
+		}
+		ScopedMeasurer measure("virtual function");
+		for (int i = 0; i < num_calls; ++i)
+		{
+			for (auto & updateable : update_loop)
+			{
+				updateable->update(0.016f);
 			}
 		}
 	}
+	{
+		std::default_random_engine generator(argc);
+		std::uniform_int_distribution<int> random_int(0, 1);
+		std::vector<std::function<void (float)>> update_loop;
+		std::vector<std::unique_ptr<LambdaA>> slotsA;
+		std::vector<std::unique_ptr<LambdaB>> slotsB;
+		for (size_t i = 0; i < num_allocations; ++i)
+		{
+			if (random_int(generator))
+			{
+				slotsA.emplace_back(new LambdaA(update_loop));
+			}
+			else
+			{
+				slotsB.emplace_back(new LambdaB(update_loop));
+			}
+		}
+		ScopedMeasurer measure("std::function");
+		for (int i = 0; i < num_calls; ++i)
+		{
+			for (auto & updateable : update_loop)
+			{
+				updateable(0.016f);
+			}
+		}
+	}
+	std::cin.get();
 }
