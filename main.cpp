@@ -1,5 +1,5 @@
 #include "signal.h"
-#include "typeSortedSignal.h"
+#include "typeSortedSignal.hpp"
 #include <iostream>
 #ifndef DISABLE_GTEST
 #include <gtest/gtest.h>
@@ -7,6 +7,8 @@
 #include <random>
 #include <cstring>
 #include <chrono>
+
+using namespace sig;
 
 struct Updateable
 {
@@ -146,7 +148,7 @@ int main(int argc, char * argv[])
 			}
 		}
 		ScopedMeasurer measure("signal");
-		for (int i = 0; i < num_calls; ++i)
+		for (size_t i = 0; i < num_calls; ++i)
 		{
 			update_loop.emit(0.016f);
 		}
@@ -169,7 +171,7 @@ int main(int argc, char * argv[])
 			update_loop.push_back(updateables.back().get());
 		}
 		ScopedMeasurer measure("virtual function");
-		for (int i = 0; i < num_calls; ++i)
+		for (size_t i = 0; i < num_calls; ++i)
 		{
 			for (auto & updateable : update_loop)
 			{
@@ -195,7 +197,7 @@ int main(int argc, char * argv[])
 			}
 		}
 		ScopedMeasurer measure("std::function");
-		for (int i = 0; i < num_calls; ++i)
+		for (size_t i = 0; i < num_calls; ++i)
 		{
 			for (auto & updateable : update_loop)
 			{
